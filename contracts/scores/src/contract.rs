@@ -41,7 +41,9 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::SetOwner { owner } => try_set_owner(deps, info, owner),
-        ExecuteMsg::SetScore { addr, score } => try_set_score(deps, info, addr, score),
+        ExecuteMsg::SetScore { addr, token, score } => {
+            try_set_score(deps, info, addr, token, score)
+        }
     }
 }
 
@@ -64,13 +66,14 @@ pub fn try_set_score(
     deps: DepsMut,
     info: MessageInfo,
     addr: Addr,
+    token: String,
     score: i32,
 ) -> Result<Response, ContractError> {
     STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
         if info.sender != state.owner {
             return Err(ContractError::Unauthorized {});
         }
-        state.scores.insert(addr, score);
+        state.scores.insert((addr, token), score);
         Ok(state)
     })?;
     Ok(Response::new())
@@ -80,7 +83,7 @@ pub fn try_set_score(
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetOwner {} => to_binary(&query_owner(deps)?),
-        QueryMsg::GetScore { addr } => to_binary(&query_score(deps, addr)?),
+        QueryMsg::GetScore { addr, token } => to_binary(&query_score(deps, addr, token)?),
     }
 }
 
@@ -89,14 +92,15 @@ fn query_owner(deps: Deps) -> StdResult<OwnerResponse> {
     Ok(OwnerResponse { owner: state.owner })
 }
 
-fn query_score(deps: Deps, addr: Addr) -> StdResult<ScoreResponse> {
+fn query_score(deps: Deps, addr: Addr, token: String) -> StdResult<ScoreResponse> {
     let state = STATE.load(deps.storage)?;
-    match state.scores.get(&addr) {
-        Some(score) => Ok(ScoreResponse::Success {
+    match state.scores.get(&(addr.clone(), token.clone())) {
+        Some(score) => Ok(ScoreResponse::Score {
             addr,
+            token,
             score: score.clone(),
         }),
-        None => Ok(ScoreResponse::UnknownAddress {}),
+        None => Ok(ScoreResponse::Unscored {}),
     }
 }
 
@@ -183,6 +187,7 @@ mod tests {
         let auth_info = mock_info("creator", &coins(2, "token"));
         let msg = ExecuteMsg::SetScore {
             addr: Addr::unchecked("address1"),
+            token: "token1".to_string(),
             score: 123,
         };
         let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
@@ -192,16 +197,18 @@ mod tests {
             mock_env(),
             QueryMsg::GetScore {
                 addr: Addr::unchecked("address1"),
+                token: "token1".to_string(),
             },
         )
         .unwrap();
         let value: ScoreResponse = from_binary(&res).unwrap();
         match value {
-            ScoreResponse::Success { addr, score } => {
+            ScoreResponse::Score { addr, token, score } => {
                 assert_eq!(addr, Addr::unchecked("address1"));
+                assert_eq!(token, "token1");
                 assert_eq!(score, 123);
             }
-            _ => panic!("Expected Success"),
+            _ => panic!("Expected Score"),
         }
     }
 
@@ -217,13 +224,14 @@ mod tests {
             mock_env(),
             QueryMsg::GetScore {
                 addr: Addr::unchecked("address1"),
+                token: "token1".to_string(),
             },
         )
         .unwrap();
         let value: ScoreResponse = from_binary(&res).unwrap();
         match value {
-            ScoreResponse::UnknownAddress {} => {}
-            _ => panic!("Expected UnknownAddress"),
+            ScoreResponse::Unscored {} => {}
+            _ => panic!("Expected Unscored"),
         }
     }
 
@@ -238,6 +246,7 @@ mod tests {
         let auth_info = mock_info("other", &coins(2, "token"));
         let msg = ExecuteMsg::SetScore {
             addr: Addr::unchecked("address1"),
+            token: "token1".to_string(),
             score: 123,
         };
         match execute(deps.as_mut(), mock_env(), auth_info, msg) {
@@ -250,13 +259,14 @@ mod tests {
             mock_env(),
             QueryMsg::GetScore {
                 addr: Addr::unchecked("address1"),
+                token: "token1".to_string(),
             },
         )
         .unwrap();
         let value: ScoreResponse = from_binary(&res).unwrap();
         match value {
-            ScoreResponse::UnknownAddress {} => {}
-            _ => panic!("Expected UnknownAddress"),
+            ScoreResponse::Unscored {} => {}
+            _ => panic!("Expected Unscored"),
         }
     }
 }
