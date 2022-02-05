@@ -1,6 +1,6 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
@@ -41,6 +41,7 @@ pub fn execute(
     match msg {
         ExecuteMsg::Increment {} => try_increment(deps),
         ExecuteMsg::Reset { count } => try_reset(deps, info, count),
+        ExecuteMsg::SetOwner { owner } => try_set_owner(deps, info, owner),
     }
 }
 
@@ -61,6 +62,21 @@ pub fn try_reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Respons
         Ok(state)
     })?;
     Ok(Response::new().add_attribute("method", "reset"))
+}
+
+pub fn try_set_owner(
+    deps: DepsMut,
+    info: MessageInfo,
+    owner: Addr,
+) -> Result<Response, ContractError> {
+    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+        if info.sender != state.owner {
+            return Err(ContractError::Unauthorized {});
+        }
+        state.owner = owner;
+        Ok(state)
+    })?;
+    Ok(Response::new())
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -85,7 +101,7 @@ fn query_owner(deps: Deps) -> StdResult<OwnerResponse> {
 mod tests {
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coins, from_binary};
+    use cosmwasm_std::{coins, from_binary, Addr};
 
     #[test]
     fn proper_initialization() {
@@ -156,12 +172,52 @@ mod tests {
         let mut deps = mock_dependencies(&coins(2, "token"));
         let msg = InstantiateMsg { count: 17 };
         let info = mock_info("creator", &coins(2, "token"));
-        let owner = info.sender.clone();
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
         let res = query(deps.as_ref(), mock_env(), QueryMsg::GetOwner {}).unwrap();
         let value: OwnerResponse = from_binary(&res).unwrap();
 
-        assert_eq!(value.owner, owner);
+        assert_eq!(value.owner, Addr::unchecked("creator"));
+    }
+
+    #[test]
+    fn set_owner() {
+        let mut deps = mock_dependencies(&coins(2, "token"));
+        let msg = InstantiateMsg { count: 17 };
+        let info = mock_info("creator", &coins(2, "token"));
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // the owner can change the owner
+        let auth_info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::SetOwner {
+            owner: Addr::unchecked("new_owner"),
+        };
+        let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
+
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetOwner {}).unwrap();
+        let value: OwnerResponse = from_binary(&res).unwrap();
+        assert_eq!(value.owner, Addr::unchecked("new_owner"));
+    }
+
+    #[test]
+    fn set_owner_unauthorized() {
+        let mut deps = mock_dependencies(&coins(2, "token"));
+        let msg = InstantiateMsg { count: 17 };
+        let info = mock_info("creator", &coins(2, "token"));
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // only owner can change the owner
+        let auth_info = mock_info("other", &coins(2, "token"));
+        let msg = ExecuteMsg::SetOwner {
+            owner: Addr::unchecked("new_owner"),
+        };
+        match execute(deps.as_mut(), mock_env(), auth_info, msg) {
+            Err(ContractError::Unauthorized {}) => {}
+            _ => panic!("Must return unauthorized error"),
+        }
+
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetOwner {}).unwrap();
+        let value: OwnerResponse = from_binary(&res).unwrap();
+        assert_eq!(value.owner, Addr::unchecked("creator"));
     }
 }
